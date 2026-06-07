@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>NavonaAI — Shopify Lead Checker</title>
+<style>
+  :root {
+    --bg: #0f1c17; --panel: #14241d; --ink: #e7f3ee; --muted: #8aa99c;
+    --accent: #2fbd8a; --accent-ink: #04130d; --line: #244033; --bad: #e2685f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 40px 20px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 28px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+  input[type=password], select, input[type=file] {
+    width: 100%; padding: 11px 12px; background: #0e1b15; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 9px; font-size: 14px; }
+  .drop { border: 1.5px dashed var(--line); border-radius: 12px; padding: 26px; text-align: center;
+          color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop.over { border-color: var(--accent); background: #102a20; color: var(--ink); }
+  button { margin-top: 18px; width: 100%; padding: 12px; border: 0; border-radius: 10px;
+           background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 15px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .hide { display: none; }
+  .err { color: var(--bad); font-size: 13px; margin-top: 10px; min-height: 16px; }
+  .bar { height: 10px; background: #0e1b15; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .links a { display: inline-block; margin: 6px 10px 0 0; color: var(--accent); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+  code { color: var(--ink); background: #0e1b15; padding: 1px 6px; border-radius: 5px; }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 22px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Shopify Lead Checker</h1>
+  <p class="sub">Upload a lead CSV, pick the website column, and download the Shopify / not-Shopify split.</p>
+
+  <!-- Gate -->
+  <div id="gate" class="panel">
+    <label for="pw">Team password</label>
+    <input id="pw" type="password" placeholder="Enter password" autocomplete="off" />
+    <button id="pwBtn">Unlock</button>
+    <div id="pwErr" class="err"></div>
+  </div>
+
+  <!-- Upload -->
+  <div id="app" class="panel hide">
+    <div id="drop" class="drop">Drop a CSV here, or click to choose a file.</div>
+    <input id="file" type="file" accept=".csv,text/csv" class="hide" />
+    <div id="picked" class="hide">
+      <label for="col">Which column holds the website / domain?</label>
+      <select id="col"></select>
+      <div class="row" id="fileInfo"></div>
+      <button id="go">Check</button>
+    </div>
+    <div id="upErr" class="err"></div>
+  </div>
+
+  <!-- Job status -->
+  <div id="job" class="panel hide">
+    <div class="row"><div>Job</div><code id="jobId"></code></div>
+    <p id="state" style="margin:14px 0 8px;">Starting…</p>
+    <div class="bar"><i id="prog"></i></div>
+    <div id="links" class="links"></div>
+    <div id="jobErr" class="err"></div>
+    <p class="foot">Bookmark this page to check the result later.</p>
+  </div>
+
+  <p class="foot">Internal tool · NavonaAI</p>
+</div>
+
+<script>
+const SUPABASE_URL = "https://boexsifyicamfahvmnsr.supabase.co";
+const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJvZXhzaWZ5aWNhbWZhaHZtbnNyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk3NjMyMTAsImV4cCI6MjA3NTMzOTIxMH0.-L1aak_P5YjKnjdKFxSiKbDIT1xH4t9OFRlJYeTmH3o";
+const ENQUEUE_URL = SUPABASE_URL + "/functions/v1/enqueue";
+const BUCKET = "shopify-checks";
+const PW_SHA256 = "c1569e592bfc641eb47b74856d30de7818389bfddaa061d2c03e44aa809e7204";
+const OUTPUTS = ["shopify.csv", "not-shopify.csv", "uncertain.csv", "report.json", "output.zip"];
+
+const $ = (id) => document.getElementById(id);
+const authHeaders = { "Authorization": "Bearer " + ANON, "apikey": ANON };
+
+async function sha256Hex(s) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ---- storage helpers (fetch only; private bucket via anon + RLS) ----
+function objUrl(path) { return `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`; }
+
+async function upload(path, body, contentType) {
+  const r = await fetch(objUrl(path), {
+    method: "POST",
+    headers: { ...authHeaders, "x-upsert": "true", "Content-Type": contentType },
+    body,
+  });
+  if (!r.ok) throw new Error(`upload ${path} failed (${r.status})`);
+}
+
+async function getText(path) {
+  const r = await fetch(objUrl(path), { headers: authHeaders });
+  if (!r.ok) throw new Error(`read ${path} failed (${r.status})`);
+  return r.text();
+}
+
+async function signedUrl(path, expires = 3600) {
+  const r = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/${BUCKET}/${path}`, {
+    method: "POST",
+    headers: { ...authHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ expiresIn: expires }),
+  });
+  if (!r.ok) return null;
+  const { signedURL } = await r.json();
+  return `${SUPABASE_URL}/storage/v1${signedURL}`;
+}
+
+// ---- CSV header parse (first line only) ----
+function parseHeader(line) {
+  const out = []; let cur = "", q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
+    else { if (c === '"') q = true; else if (c === ",") { out.push(cur); cur = ""; } else cur += c; }
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+
+// ---- gate ----
+$("pwBtn").onclick = async () => {
+  const ok = (await sha256Hex($("pw").value)) === PW_SHA256;
+  if (!ok) { $("pwErr").textContent = "Wrong password."; return; }
+  sessionStorage.setItem("sc_ok", "1");
+  showAfterGate();
+};
+$("pw").addEventListener("keydown", e => { if (e.key === "Enter") $("pwBtn").click(); });
+
+function showAfterGate() {
+  $("gate").classList.add("hide");
+  const jobId = new URLSearchParams(location.search).get("job");
+  if (jobId) { $("job").classList.remove("hide"); watchJob(jobId); }
+  else { $("app").classList.remove("hide"); }
+}
+
+// ---- upload flow ----
+let chosenFile = null;
+const drop = $("drop");
+drop.onclick = () => $("file").click();
+["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); });
+$("file").addEventListener("change", e => { if (e.target.files[0]) onFile(e.target.files[0]); });
+
+async function onFile(file) {
+  $("upErr").textContent = "";
+  chosenFile = file;
+  const text = await file.text();
+  const firstNL = text.indexOf("\n");
+  const headerLine = (firstNL === -1 ? text : text.slice(0, firstNL)).replace(/\r$/, "");
+  const cols = parseHeader(headerLine).filter(Boolean);
+  if (!cols.length) { $("upErr").textContent = "Could not read a header row."; return; }
+  const rows = text.split("\n").filter(l => l.trim()).length - 1;
+  chosenFile._rows = Math.max(rows, 0);
+  const sel = $("col"); sel.innerHTML = "";
+  cols.forEach(c => { const o = document.createElement("option"); o.value = c; o.textContent = c; sel.appendChild(o); });
+  const guess = cols.find(c => /web|site|domain|url/i.test(c));
+  if (guess) sel.value = guess;
+  $("fileInfo").textContent = `${file.name} · ${chosenFile._rows.toLocaleString()} rows`;
+  drop.textContent = "✓ " + file.name + " — choose a different file";
+  $("picked").classList.remove("hide");
+}
+
+$("go").onclick = async () => {
+  if (!chosenFile) return;
+  $("go").disabled = true; $("upErr").textContent = "";
+  try {
+    const jobId = crypto.randomUUID();
+    const created = new Date().toISOString();
+    await upload(`${jobId}/input.csv`, chosenFile, "text/csv");
+    await upload(`${jobId}/meta.json`,
+      JSON.stringify({ domain_column: $("col").value, rows: chosenFile._rows, created_at: created }),
+      "application/json");
+    await upload(`${jobId}/status.json`, JSON.stringify({ state: "queued", progress: 0, error: null }), "application/json");
+    const r = await fetch(ENQUEUE_URL, {
+      method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId }),
+    });
+    if (!r.ok) throw new Error("Could not start the job (" + r.status + ").");
+    location.search = "?job=" + jobId;
+  } catch (e) {
+    $("upErr").textContent = e.message || String(e);
+    $("go").disabled = false;
+  }
+};
+
+// ---- job status ----
+async function watchJob(jobId) {
+  $("jobId").textContent = jobId;
+  let done = false;
+  async function tick() {
+    if (done) return;
+    try {
+      const st = JSON.parse(await getText(`${jobId}/status.json`));
+      $("prog").style.width = (st.progress || 0) + "%";
+      $("state").textContent = ({
+        queued: "Queued — waiting for a runner…",
+        running: "Checking domains…",
+        done: "Done.",
+        failed: "Failed.",
+      })[st.state] || st.state;
+      if (st.state === "done") { done = true; await showDownloads(jobId); return; }
+      if (st.state === "failed") { done = true; $("jobErr").textContent = st.error || "Job failed."; return; }
+    } catch (e) { /* status not written yet — keep polling */ }
+    setTimeout(tick, 15000);
+  }
+  tick();
+}
+
+async function showDownloads(jobId) {
+  $("prog").style.width = "100%";
+  const box = $("links");
+  for (const name of OUTPUTS) {
+    const url = await signedUrl(`${jobId}/${name}`);
+    if (url) { const a = document.createElement("a"); a.href = url; a.textContent = name; a.download = name; box.appendChild(a); }
+  }
+}
+
+if (sessionStorage.getItem("sc_ok")) showAfterGate();
+</script>
+</body>
+</html>
