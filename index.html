@@ -83,7 +83,7 @@ const ENQUEUE_URL = SUPABASE_URL + "/functions/v1/enqueue";
 const STATUS_URL = SUPABASE_URL + "/functions/v1/status";
 const BUCKET = "shopify-checks";
 const PW_SHA256 = "c1569e592bfc641eb47b74856d30de7818389bfddaa061d2c03e44aa809e7204";
-const OUTPUTS = ["shopify.csv", "not-shopify.csv", "uncertain.csv", "report.json", "output.zip"];
+const OUTPUTS = ["shopify.csv", "not-shopify.csv", "uncertain.csv", "report.json", "report.md", "output.zip"];
 
 const $ = (id) => document.getElementById(id);
 const authHeaders = { "Authorization": "Bearer " + ANON, "apikey": ANON };
