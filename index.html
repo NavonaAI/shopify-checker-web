@@ -80,6 +80,7 @@
 const SUPABASE_URL = "https://boexsifyicamfahvmnsr.supabase.co";
 const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJvZXhzaWZ5aWNhbWZhaHZtbnNyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk3NjMyMTAsImV4cCI6MjA3NTMzOTIxMH0.-L1aak_P5YjKnjdKFxSiKbDIT1xH4t9OFRlJYeTmH3o";
 const ENQUEUE_URL = SUPABASE_URL + "/functions/v1/enqueue";
+const STATUS_URL = SUPABASE_URL + "/functions/v1/status";
 const BUCKET = "shopify-checks";
 const PW_SHA256 = "c1569e592bfc641eb47b74856d30de7818389bfddaa061d2c03e44aa809e7204";
 const OUTPUTS = ["shopify.csv", "not-shopify.csv", "uncertain.csv", "report.json", "output.zip"];
@@ -104,21 +105,17 @@ async function upload(path, body, contentType) {
   if (!r.ok) throw new Error(`upload ${path} failed (${r.status})`);
 }
 
-async function getText(path) {
-  const r = await fetch(objUrl(path), { headers: authHeaders });
-  if (!r.ok) throw new Error(`read ${path} failed (${r.status})`);
-  return r.text();
-}
-
-async function signedUrl(path, expires = 3600) {
-  const r = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/${BUCKET}/${path}`, {
+// Job status + signed downloads come from the `status` Edge Function (server
+// reads the bucket with the service role). The bucket is NOT anon-readable, so
+// only someone holding the unguessable job id can see a job's status/outputs.
+async function fetchStatus(jobId) {
+  const r = await fetch(STATUS_URL, {
     method: "POST",
     headers: { ...authHeaders, "Content-Type": "application/json" },
-    body: JSON.stringify({ expiresIn: expires }),
+    body: JSON.stringify({ jobId }),
   });
-  if (!r.ok) return null;
-  const { signedURL } = await r.json();
-  return `${SUPABASE_URL}/storage/v1${signedURL}`;
+  if (!r.ok) throw new Error(`status failed (${r.status})`);
+  return r.json();
 }
 
 // ---- CSV header parse (first line only) ----
@@ -207,27 +204,28 @@ async function watchJob(jobId) {
   async function tick() {
     if (done) return;
     try {
-      const st = JSON.parse(await getText(`${jobId}/status.json`));
+      const st = await fetchStatus(jobId);
       $("prog").style.width = (st.progress || 0) + "%";
       $("state").textContent = ({
         queued: "Queued — waiting for a runner…",
         running: "Checking domains…",
         done: "Done.",
         failed: "Failed.",
+        unknown: "Starting…",
       })[st.state] || st.state;
-      if (st.state === "done") { done = true; await showDownloads(jobId); return; }
+      if (st.state === "done") { done = true; showDownloads(st.downloads || {}); return; }
       if (st.state === "failed") { done = true; $("jobErr").textContent = st.error || "Job failed."; return; }
-    } catch (e) { /* status not written yet — keep polling */ }
+    } catch (e) { /* transient — keep polling */ }
     setTimeout(tick, 15000);
   }
   tick();
 }
 
-async function showDownloads(jobId) {
+function showDownloads(downloads) {
   $("prog").style.width = "100%";
   const box = $("links");
   for (const name of OUTPUTS) {
-    const url = await signedUrl(`${jobId}/${name}`);
+    const url = downloads[name];
     if (url) { const a = document.createElement("a"); a.href = url; a.textContent = name; a.download = name; box.appendChild(a); }
   }
 }
