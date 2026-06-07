@@ -13,10 +13,11 @@
   * { box-sizing: border-box; }
   body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
          background: var(--bg); color: var(--ink); }
-  .wrap { max-width: 720px; margin: 0 auto; padding: 40px 20px; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 40px 20px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0; }
   .sub { color: var(--muted); margin: 0 0 28px; }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; margin-bottom: 18px; }
   label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
   input[type=password], select, input[type=file] {
     width: 100%; padding: 11px 12px; background: #0e1b15; color: var(--ink);
@@ -26,6 +27,8 @@
   .drop.over { border-color: var(--accent); background: #102a20; color: var(--ink); }
   button { margin-top: 18px; width: 100%; padding: 12px; border: 0; border-radius: 10px;
            background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 15px; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line);
+                 width: auto; margin: 0; padding: 7px 12px; font-size: 13px; font-weight: 600; }
   button:disabled { opacity: .5; cursor: not-allowed; }
   .hide { display: none; }
   .err { color: var(--bad); font-size: 13px; margin-top: 10px; min-height: 16px; }
@@ -33,8 +36,20 @@
   .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
   .links a { display: inline-block; margin: 6px 10px 0 0; color: var(--accent); }
   .row { display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+  .hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
   code { color: var(--ink); background: #0e1b15; padding: 1px 6px; border-radius: 5px; }
+  a.back { color: var(--accent); font-size: 13px; text-decoration: none; }
   .foot { color: var(--muted); font-size: 12px; margin-top: 22px; text-align: center; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tr.job { cursor: pointer; }
+  tr.job:hover td { background: #102a20; }
+  td a { color: var(--accent); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
+  .pill.done { color: var(--accent); border-color: var(--accent); }
+  .pill.failed { color: var(--bad); border-color: var(--bad); }
+  .muted { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -63,8 +78,23 @@
     <div id="upErr" class="err"></div>
   </div>
 
+  <!-- Jobs table -->
+  <div id="jobsPanel" class="panel hide">
+    <div class="hdr">
+      <h2>Recent jobs</h2>
+      <button id="refreshJobs" class="ghost">Refresh</button>
+    </div>
+    <p class="muted" style="margin:4px 0 0; font-size:12px;">Lost a job link? Find it here.</p>
+    <table>
+      <thead><tr><th>File</th><th>Rows</th><th>Created</th><th>Status</th><th>Job</th></tr></thead>
+      <tbody id="jobsBody"></tbody>
+    </table>
+    <div id="jobsErr" class="err"></div>
+  </div>
+
   <!-- Job status -->
   <div id="job" class="panel hide">
+    <div class="hdr"><a class="back" href="./">&larr; All jobs</a></div>
     <div class="row"><div>Job</div><code id="jobId"></code></div>
     <p id="state" style="margin:14px 0 8px;">Starting…</p>
     <div class="bar"><i id="prog"></i></div>
@@ -81,19 +111,29 @@ const SUPABASE_URL = "https://boexsifyicamfahvmnsr.supabase.co";
 const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJvZXhzaWZ5aWNhbWZhaHZtbnNyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk3NjMyMTAsImV4cCI6MjA3NTMzOTIxMH0.-L1aak_P5YjKnjdKFxSiKbDIT1xH4t9OFRlJYeTmH3o";
 const ENQUEUE_URL = SUPABASE_URL + "/functions/v1/enqueue";
 const STATUS_URL = SUPABASE_URL + "/functions/v1/status";
+const JOBS_URL = SUPABASE_URL + "/functions/v1/jobs";
 const BUCKET = "shopify-checks";
-const PW_SHA256 = "c1569e592bfc641eb47b74856d30de7818389bfddaa061d2c03e44aa809e7204";
-const OUTPUTS = ["shopify.csv", "not-shopify.csv", "uncertain.csv", "report.json", "report.md", "output.zip"];
+const OUTPUTS = ["shopify.csv", "not-shopify.csv", "uncertain.csv", "full_results.csv", "report.json", "report.md", "output.zip"];
 
 const $ = (id) => document.getElementById(id);
 const authHeaders = { "Authorization": "Bearer " + ANON, "apikey": ANON };
 
-async function sha256Hex(s) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+// The team passphrase. Held in memory + sessionStorage and sent as the
+// x-checker-key header on every Edge Function call. The server (enqueue /
+// status / jobs) validates it against a service-role-only secret — this is the
+// real gate; the page no longer "checks" the password itself.
+let checkerKey = "";
+
+// ---- Edge Function call (passphrase-gated) ----
+function fnCall(url, body) {
+  return fetch(url, {
+    method: "POST",
+    headers: { ...authHeaders, "x-checker-key": checkerKey, "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
 }
 
-// ---- storage helpers (fetch only; private bucket via anon + RLS) ----
+// ---- storage upload (anon INSERT; fresh UUID paths, so no upsert) ----
 function objUrl(path) { return `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`; }
 
 async function upload(path, body, contentType) {
@@ -105,15 +145,9 @@ async function upload(path, body, contentType) {
   if (!r.ok) throw new Error(`upload ${path} failed (${r.status})`);
 }
 
-// Job status + signed downloads come from the `status` Edge Function (server
-// reads the bucket with the service role). The bucket is NOT anon-readable, so
-// only someone holding the unguessable job id can see a job's status/outputs.
 async function fetchStatus(jobId) {
-  const r = await fetch(STATUS_URL, {
-    method: "POST",
-    headers: { ...authHeaders, "Content-Type": "application/json" },
-    body: JSON.stringify({ jobId }),
-  });
+  const r = await fnCall(STATUS_URL, { jobId });
+  if (r.status === 401) { handleExpiredKey(); throw new Error("unauthorized"); }
   if (!r.ok) throw new Error(`status failed (${r.status})`);
   return r.json();
 }
@@ -132,10 +166,25 @@ function parseHeader(line) {
 
 // ---- gate ----
 $("pwBtn").onclick = async () => {
-  const ok = (await sha256Hex($("pw").value)) === PW_SHA256;
-  if (!ok) { $("pwErr").textContent = "Wrong password."; return; }
-  sessionStorage.setItem("sc_ok", "1");
+  $("pwErr").textContent = "";
+  const key = $("pw").value;
+  if (!key) { $("pwErr").textContent = "Enter the password."; return; }
+  $("pwBtn").disabled = true;
+  checkerKey = key;
+  let r;
+  try {
+    r = await fnCall(JOBS_URL, {});
+  } catch (e) {
+    checkerKey = ""; $("pwBtn").disabled = false;
+    $("pwErr").textContent = "Could not reach the server."; return;
+  }
+  $("pwBtn").disabled = false;
+  if (r.status === 401) { checkerKey = ""; $("pwErr").textContent = "Wrong password."; return; }
+  if (!r.ok) { checkerKey = ""; $("pwErr").textContent = "Server error (" + r.status + ")."; return; }
+  sessionStorage.setItem("sc_key", key);
+  const data = await r.json().catch(() => ({ jobs: [] }));
   showAfterGate();
+  renderJobs(data.jobs || []);
 };
 $("pw").addEventListener("keydown", e => { if (e.key === "Enter") $("pwBtn").click(); });
 
@@ -143,7 +192,67 @@ function showAfterGate() {
   $("gate").classList.add("hide");
   const jobId = new URLSearchParams(location.search).get("job");
   if (jobId) { $("job").classList.remove("hide"); watchJob(jobId); }
-  else { $("app").classList.remove("hide"); }
+  else { $("app").classList.remove("hide"); $("jobsPanel").classList.remove("hide"); }
+}
+
+// ---- jobs table ----
+$("refreshJobs").onclick = () => loadJobs();
+
+async function loadJobs() {
+  $("jobsErr").textContent = "";
+  $("jobsBody").innerHTML = `<tr><td colspan="5" class="muted">Loading…</td></tr>`;
+  let r;
+  try { r = await fnCall(JOBS_URL, {}); }
+  catch (e) { $("jobsErr").textContent = "Could not load jobs."; $("jobsBody").innerHTML = ""; return; }
+  if (r.status === 401) { handleExpiredKey(); return; }
+  if (!r.ok) { $("jobsErr").textContent = "Could not load jobs (" + r.status + ")."; $("jobsBody").innerHTML = ""; return; }
+  const data = await r.json().catch(() => ({ jobs: [] }));
+  renderJobs(data.jobs || []);
+}
+
+function fmtDate(s) {
+  if (!s) return "—";
+  const d = new Date(s);
+  return isNaN(d) ? s : d.toLocaleString();
+}
+
+function statusPill(state) {
+  const cls = state === "done" ? "pill done" : state === "failed" ? "pill failed" : "pill";
+  const label = ({ queued: "queued", running: "running", done: "done", failed: "failed" })[state] || escapeHtml(state || "unknown");
+  return `<span class="${cls}">${label}</span>`;
+}
+
+function renderJobs(jobs) {
+  const body = $("jobsBody");
+  if (!jobs.length) { body.innerHTML = `<tr><td colspan="5" class="muted">No jobs yet.</td></tr>`; return; }
+  body.innerHTML = "";
+  for (const j of jobs) {
+    const tr = document.createElement("tr");
+    tr.className = "job";
+    const rows = (j.rows == null) ? "—" : Number(j.rows).toLocaleString();
+    const file = j.filename ? escapeHtml(j.filename) : "—";
+    const short = (j.jobId || "").slice(0, 8);
+    tr.innerHTML =
+      `<td>${file}</td>` +
+      `<td>${rows}</td>` +
+      `<td class="muted">${fmtDate(j.created_at)}</td>` +
+      `<td>${statusPill(j.state)}</td>` +
+      `<td><a href="?job=${encodeURIComponent(j.jobId)}"><code>${short}…</code></a></td>`;
+    tr.onclick = (e) => { if (e.target.tagName !== "A") location.search = "?job=" + encodeURIComponent(j.jobId); };
+    body.appendChild(tr);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function handleExpiredKey() {
+  checkerKey = "";
+  sessionStorage.removeItem("sc_key");
+  $("app").classList.add("hide"); $("jobsPanel").classList.add("hide"); $("job").classList.add("hide");
+  $("gate").classList.remove("hide");
+  $("pwErr").textContent = "Session expired — enter the password again.";
 }
 
 // ---- upload flow ----
@@ -182,13 +291,11 @@ $("go").onclick = async () => {
     const created = new Date().toISOString();
     await upload(`${jobId}/input.csv`, chosenFile, "text/csv");
     await upload(`${jobId}/meta.json`,
-      JSON.stringify({ domain_column: $("col").value, rows: chosenFile._rows, created_at: created }),
+      JSON.stringify({ filename: chosenFile.name, domain_column: $("col").value, rows: chosenFile._rows, created_at: created }),
       "application/json");
     await upload(`${jobId}/status.json`, JSON.stringify({ state: "queued", progress: 0, error: null }), "application/json");
-    const r = await fetch(ENQUEUE_URL, {
-      method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId }),
-    });
+    const r = await fnCall(ENQUEUE_URL, { jobId });
+    if (r.status === 401) { handleExpiredKey(); return; }
     if (!r.ok) throw new Error("Could not start the job (" + r.status + ").");
     location.search = "?job=" + jobId;
   } catch (e) {
@@ -215,7 +322,10 @@ async function watchJob(jobId) {
       })[st.state] || st.state;
       if (st.state === "done") { done = true; showDownloads(st.downloads || {}); return; }
       if (st.state === "failed") { done = true; $("jobErr").textContent = st.error || "Job failed."; return; }
-    } catch (e) { /* transient — keep polling */ }
+    } catch (e) {
+      if (e.message === "unauthorized") { done = true; return; } // gate re-shown; stop polling
+      /* transient — keep polling */
+    }
     setTimeout(tick, 15000);
   }
   tick();
@@ -230,7 +340,13 @@ function showDownloads(downloads) {
   }
 }
 
-if (sessionStorage.getItem("sc_ok")) showAfterGate();
+// ---- session restore ----
+const savedKey = sessionStorage.getItem("sc_key");
+if (savedKey) {
+  checkerKey = savedKey;
+  showAfterGate();
+  if (!new URLSearchParams(location.search).get("job")) loadJobs();
+}
 </script>
 </body>
 </html>
