@@ -312,10 +312,15 @@ async function watchJob(jobId) {
     if (done) return;
     try {
       const st = await fetchStatus(jobId);
-      $("prog").style.width = (st.progress || 0) + "%";
+      const hasCount = Number.isFinite(st.total) && st.total > 0;
+      $("prog").style.width =
+        (hasCount ? Math.round((st.processed || 0) * 100 / st.total) : (st.progress || 0)) + "%";
+      const runningLabel = hasCount
+        ? `Checking domains… ${st.processed || 0} of ${st.total}`
+        : "Checking domains…";
       $("state").textContent = ({
         queued: "Queued — waiting for a runner…",
-        running: "Checking domains…",
+        running: runningLabel,
         done: "Done.",
         failed: "Failed.",
         unknown: "Starting…",
